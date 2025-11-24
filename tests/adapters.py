@@ -9,6 +9,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
+from cs336_basics.bpe import BPETokenizer
 
 def run_linear(
     d_in: int,
@@ -588,5 +589,8 @@ def run_train_bpe(
                 BPE merges. Each list item is a tuple of bytes (<token1>, <token2>),
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
+
     """
-    raise NotImplementedError
+    bpe = BPETokenizer(vocab_size, special_tokens=special_tokens)
+    vocab, merges = bpe.train_bpe(input_path)
+    return vocab, merges
