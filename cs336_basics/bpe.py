@@ -6,8 +6,9 @@ from abc import ABC
 import os
 import sys
 from splitter import Splitter
+from pathlib import Path
 
-from pretokenization_example import pre_tokenize
+from pretokenization_example import pre_tokenize, find_chunk_boundaries
 from tests.conftest import vocab_size
 
 
@@ -269,9 +270,46 @@ class BPETokenizer:
         )
 
 
-    def train_bpe(self, input_path: str | os.PathLike):
+    def encode(self, string: str) -> list[int]:
+        split_string = string.split(self.splitter.split_re.pattern)
+        indices: list[int] = []
+        for segment in split_string:
+            if segment in self.special_tokens:
+                indices.append(256 + self.special_tokens.index(segment))
+                continue
+            for tok in self.splitter.split_re.finditer(segment):
+                key = tok.group()
+                key = list(key.encode())
+                for new_id, (left, right) in enumerate(self.merges, start=256 + len(self.special_tokens)):
+                    key, _ = self.merge_key(left, right, key, new_id)
+                    if len(key) == 1:
+                        break
+                indices.extend(key)
+        return indices
 
-        pre_counts = pre_tokenize(self.splitter, input_path, num_processes=4)
+    def encode_file(self, input_path: str | os.PathLike) -> list[int]:
+        file_path = Path(input_path)
+        chunk_size_in_bytes = 1024 * 1024 * 10  # 10 MB
+        n_chunks = math.ceil(file_path.stat().st_size / chunk_size_in_bytes)
+        with Path(input_path).open("rb") as f:
+            boundaries = find_chunk_boundaries(f, n_chunks, self.special_tokens.encode())
+            tokens = []
+            f.seek(0)
+            for start, end in zip(boundaries[:-1], boundaries[1:]):
+                chunk = f.read(end - start)
+                chunk_str = chunk.decode("utf-8", errors="ignore")
+                chunk_tokens = self.encode(chunk_str)
+                tokens.extend(chunk_tokens)
+        return tokens
+
+    def decode(self, indices: list[int]) -> str:
+        if isinstance(indices, list) or isinstance(indices, tuple):
+            string = b"".join([self.convert(e).decode("utf-8", errors="replace") for e in indices])
+        string = self.convert(string).decode("utf-8", errors="replace")
+        return string
+
+    def train_bpe_simple(self, input_path: str | os.PathLike):
+        pre_counts = pre_tokenize(self.splitter, input_path, num_processes=6)
 
         self.pre_token_byte_counts: dict[tuple[bytes], int] = {
             tuple(v.encode()): c for v, c in pre_counts.items()
@@ -280,16 +318,29 @@ class BPETokenizer:
 
         n_iters = max(0, self.vocab_size - self.cur_vocab_size)
 
-        # # Non-efficient implementation
-        # for i in range(n_iters):
-        #     (updated_key, new_id), self.pre_token_byte_counts = self.iter_merge(self.pre_token_byte_counts)
-        #     self.new_id_to_bytes[new_id] = updated_key
-        #     v = self.convert(new_id)
-        #     self.merges.append(updated_key)
-        #     converted = (self.convert(updated_key[0]), self.convert(updated_key[1]))
-        #     self.merged_tuples.append(converted)
-        #     self.vocab[new_id] = v
+        # Non-efficient implementation
+        for i in range(n_iters):
+            (updated_key, new_id), self.pre_token_byte_counts = self.iter_merge(self.pre_token_byte_counts)
+            self.new_id_to_bytes[new_id] = updated_key
+            self.merges.append(updated_key)
+            v = self.convert(new_id)
+            converted = (self.convert(updated_key[0]), self.convert(updated_key[1]))
+            self.merged_tuples.append(converted)
+            self.vocab[new_id] = v
 
+        #
+        # print(self.merges)
+        return self.vocab, self.merged_tuples
+
+    def train_bpe(self, input_path: str | os.PathLike):
+
+        pre_counts = pre_tokenize(self.splitter, input_path, num_processes=6)
+
+        self.pre_token_byte_counts: dict[tuple[bytes], int] = {
+            tuple(v.encode()): c for v, c in pre_counts.items()
+        }
+
+        n_iters = max(0, self.vocab_size - self.cur_vocab_size)
 
         updated_keys, all_counts, pair_to_pre_tokens, all_updated_pairs = None, None, None, None
 
@@ -317,9 +368,6 @@ class BPETokenizer:
                                                                                all_counts_updated,
                                                                                pair_to_pre_tokens_updated,
                                                                                all_updated_pairs_updated)
-
-        #
-        # print(self.merges)
         return self.vocab, self.merged_tuples
 
     def encode(self, string: str) -> list[int]:
