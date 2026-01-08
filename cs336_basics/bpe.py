@@ -5,10 +5,10 @@ import tiktoken
 from abc import ABC
 import os
 import sys
-from splitter import Splitter
+from .splitter import Splitter
 from pathlib import Path
 
-from pretokenization_example import pre_tokenize, find_chunk_boundaries
+from .pretokenization_example import pre_tokenize, find_chunk_boundaries
 from tests.conftest import vocab_size
 
 
