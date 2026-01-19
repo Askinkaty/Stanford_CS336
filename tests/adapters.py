@@ -14,7 +14,7 @@ from torch import Tensor
 from cs336_basics.model.base_functions import Linear, Embedding, RMSNorm, SwiGLU, softmax
 from cs336_basics.model.rope import RopeEmbeddings
 from cs336_basics.model.attention import ScaledDotProductAttention, MultiHeadSelfAttention
-from cs336_basics.model.transformer import TransformerBlock
+from cs336_basics.model.transformer import TransformerBlock, Transformer
 
 def run_linear(
     d_in: int,
@@ -310,7 +310,7 @@ def run_transformer_block(
                             "norm2.gain": weights["ln2.weight"]})
     return block(in_features)
 
-
+import sys
 
 def run_transformer_lm(
     vocab_size: int,
@@ -391,7 +391,30 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    transformer = Transformer(vocab_size=vocab_size,
+                              context_length=context_length,
+                              d_model=d_model,
+                              num_layers=num_layers,
+                              num_heads=num_heads,
+                              d_ff=d_ff,
+                              rope_theta=rope_theta)
+    for layer_idx in range(num_layers):
+        transformer.layers[layer_idx].load_state_dict({
+            "attn.q_proj.weight": weights[f"layers.{layer_idx}.attn.q_proj.weight"],
+            "attn.k_proj.weight": weights[f"layers.{layer_idx}.attn.k_proj.weight"],
+            "attn.v_proj.weight": weights[f"layers.{layer_idx}.attn.v_proj.weight"],
+            "attn.o_proj.weight": weights[f"layers.{layer_idx}.attn.output_proj.weight"],
+            "norm1.gain": weights[f"layers.{layer_idx}.ln1.weight"],
+            "ffn.w1": weights[f"layers.{layer_idx}.ffn.w1.weight"],
+            "ffn.w2": weights[f"layers.{layer_idx}.ffn.w2.weight"],
+            "ffn.w3": weights[f"layers.{layer_idx}.ffn.w3.weight"],
+            "norm2.gain": weights[f"layers.{layer_idx}.ln2.weight"],
+        })
+
+    transformer.load_state_dict({"token_embedding.weight": weights["token_embeddings.weight"],
+                                 "output_projection.weight": weights["lm_head.weight"],
+                                 "norm.gain": weights["ln_final.weight"]}, strict=False)
+    return transformer(in_indices)
 
 
 def run_rmsnorm(

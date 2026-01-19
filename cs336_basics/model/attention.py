@@ -22,7 +22,7 @@ class ScaledDotProductAttention(nn.Module):
         d_k = Q.size(-1)
         scale = 1.0 / torch.sqrt(torch.tensor(d_k, dtype=scores.dtype))
         scores *= scale
-        print('scores', scores.shape)
+        # print('scores', scores.shape)
         if mask is not None:
             scores.masked_fill_(~mask, float("-inf"))
         attn_weights = softmax(scores, dim=-1)
@@ -66,27 +66,27 @@ class MultiHeadSelfAttention(nn.Module):
         K = self.k_proj(x)
         V = self.v_proj(x)
 
-        print(Q.shape, K.shape, V.shape)
+        # print(Q.shape, K.shape, V.shape)
 
         Q = rearrange(Q, "b seq (head d_k) -> b head seq d_k", head=self.num_heads)
         K = rearrange(K, "b seq (head d_k) -> b head seq d_k", head=self.num_heads)
         V = rearrange(V, "b seq (head d_v) -> b head seq d_v", head=self.num_heads)
  
-        print(Q.shape, K.shape, V.shape)
+        # print(Q.shape, K.shape, V.shape)
         if self.rope is not None:
             Q = self.rope(Q, token_positions)
             K = self.rope(K, token_positions)
         mask = torch.tril(torch.ones((seq, seq), dtype=torch.bool, device=Q.device)).unsqueeze(0).unsqueeze(0)  # (1, 1, seq, seq)
-        print(mask.shape)
+        # print(mask.shape)
 
         attn_output = self.attention(Q, K, V, mask=mask)
-        print('att output', attn_output.shape)
+        # print('att output', attn_output.shape)
 
         attn_output = rearrange(attn_output, "b head seq d_v -> b seq (head d_v)")
  
-        print(attn_output.shape)
+        # print(attn_output.shape)
 
         output = self.o_proj(attn_output)
  
-        print('final output', output.shape)
+        # print('final output', output.shape)
         return output
