@@ -15,6 +15,7 @@ from cs336_basics.model.base_functions import Linear, Embedding, RMSNorm, SwiGLU
 from cs336_basics.model.rope import RopeEmbeddings
 from cs336_basics.model.attention import ScaledDotProductAttention, MultiHeadSelfAttention
 from cs336_basics.model.transformer import TransformerBlock, Transformer
+from cs336_basics.training.loss import cross_entropy_loss
 
 def run_linear(
     d_in: int,
@@ -510,7 +511,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return cross_entropy_loss(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
