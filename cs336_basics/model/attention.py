@@ -37,20 +37,21 @@ class ScaledDotProductAttention(nn.Module):
 
 
 class MultiHeadSelfAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, max_seq_len: int, theta: float | None = None):
+    def __init__(self, d_model: int, num_heads: int, max_seq_len: int, theta: float | None = None, device: str = "cpu",
+                    dtype: torch.dtype | None = None):
         super().__init__()
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
         # Projections match test fixtures that provide weight-only state_dicts.
-        self.q_proj = nn.Linear(d_model, d_model, bias=False)
-        self.k_proj = nn.Linear(d_model, d_model, bias=False)
-        self.v_proj = nn.Linear(d_model, d_model, bias=False)
-        self.o_proj = nn.Linear(d_model, d_model, bias=False)
+        self.q_proj = nn.Linear(d_model, d_model, bias=False, device=device, dtype=dtype)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False, device=device, dtype=dtype)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False, device=device, dtype=dtype)
+        self.o_proj = nn.Linear(d_model, d_model, bias=False, device=device, dtype=dtype)
         self.attention = ScaledDotProductAttention()
         self.rope = (
-            RopeEmbeddings(theta=theta, d_k=self.d_k, max_seq_len=max_seq_len)
+            RopeEmbeddings(theta=theta, d_k=self.d_k, max_seq_len=max_seq_len, device=device)
             if theta is not None
             else None
         )

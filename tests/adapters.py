@@ -9,15 +9,15 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-# from cs336_basics.tokenization.bpe import BPETokenizer
-# from cs336_basics.tokenization.tokenizer import Tokenizer
+from cs336_basics.tokenization.bpe import BPETokenizer
+from cs336_basics.tokenization.tokenizer import Tokenizer
 from cs336_basics.model.base_functions import Linear, Embedding, RMSNorm, SwiGLU, softmax
 from cs336_basics.model.rope import RopeEmbeddings
 from cs336_basics.model.attention import ScaledDotProductAttention, MultiHeadSelfAttention
 from cs336_basics.model.transformer import TransformerBlock, Transformer
-from cs336_basics.training.loss import cross_entropy_loss
+from cs336_basics.train.loss import cross_entropy_loss
 from cs336_basics.model.optimizer import AdamW, get_cosine_lr, gradient_clipping
-from cs336_basics.training.dataloader import Dataset, save_checkpoint, load_checkpoint
+from cs336_basics.train.dataloader import Dataset, save_checkpoint, load_checkpoint
 
 
 def run_linear(

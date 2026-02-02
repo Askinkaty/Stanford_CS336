@@ -31,7 +31,8 @@ class Dataset:
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         i_finish = idx + self.context_length + 1
-        chunk = self.data[idx:i_finish].astype(np.float32)
+        # Token ids should stay integer for embedding/indexing.
+        chunk = self.data[idx:i_finish].astype(np.int32, copy=False)
         input = torch.from_numpy(chunk[:-1]).to(self.device)
         target = torch.from_numpy(chunk[1:]).to(self.device)
         return input, target
@@ -39,8 +40,8 @@ class Dataset:
     def get_iterator(self, batch_size: int) -> Iterator[tuple[Int[Tensor, "B C"], Int[Tensor, "B C"]]]:
         indices = np.arange(len(self), step=batch_size * self.context_length)
         for i in indices:
-            batch_inputs = torch.empty((batch_size, self.context_length), dtype=torch.float32, device=self.device)
-            batch_targets = torch.empty((batch_size, self.context_length), dtype=torch.float32, device=self.device)
+            batch_inputs = torch.empty((batch_size, self.context_length), dtype=torch.int32, device=self.device)
+            batch_targets = torch.empty((batch_size, self.context_length), dtype=torch.int32, device=self.device)
             for b in range(batch_size):
                 inputs, targets = self.__getitem__(i.item() + b)
                 batch_inputs[b] = inputs
@@ -49,8 +50,8 @@ class Dataset:
 
 
     def get_batch(self, batch_size: int) -> tuple[Int[Tensor, "B C"], Int[Tensor, "B C"]]:
-        batch_inputs = torch.empty((batch_size, self.context_length), dtype=torch.float32, device=self.device)
-        batch_targets = torch.empty((batch_size, self.context_length), dtype=torch.float32, device=self.device)
+        batch_inputs = torch.empty((batch_size, self.context_length), dtype=torch.int32, device=self.device)
+        batch_targets = torch.empty((batch_size, self.context_length), dtype=torch.int32, device=self.device)
         indices = torch.randint(0, len(self), size=(batch_size,))
         for b in range(batch_size):
             inputs, targets = self.__getitem__(indices[b].item())

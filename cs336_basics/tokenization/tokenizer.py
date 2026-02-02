@@ -2,7 +2,7 @@ import regex as re
 from pathlib import Path
 import math
 import os
-from pretokenization_example import find_chunk_boundaries
+from cs336_basics.tokenization.pretokenization_example import find_chunk_boundaries
 from typing import Dict, List, Tuple, Optional
 from argparse import ArgumentParser
 import numpy as np
@@ -343,9 +343,10 @@ class Tokenizer:
 
 def parse_args():
     p = ArgumentParser()
-    p.add_argument("--vocab-path")
-    p.add_argument("--merges-path")
+    p.add_argument("--vocab-path", default="/home/katinska/Stanford_CS336/cs336_basics/bpe_model_tiny_stories/bpe-vocab.txt")
+    p.add_argument("--merges-path", default="/home/katinska/Stanford_CS336/cs336_basics/bpe_model_tiny_stories/bpe-merges.txt")
     p.add_argument("--data-path", default="/home/katinska/Stanford_CS336/data")
+    p.add_argument("--tokenized-data-path", default="/home/katinska/Stanford_CS336/data/tokenized_data_tiny_stories")
 
     return p.parse_args()
 
@@ -360,7 +361,7 @@ if __name__ == "__main__":
     input_dir = Path(args.data_path)
 
     compression_ratios = {}
-    for f in input_dir.glob("*_valid.txt"):
+    for f in input_dir.glob("*-valid.txt"):
         # sample 100 docs from each dataset
         ratios = []
         for doc in re.split(tok.special_split_re, f.read_text())[:200]:
@@ -375,7 +376,12 @@ if __name__ == "__main__":
         avg_ratio = np.mean(ratios)
         print(f"{f.name} compression ratio: {avg_ratio:.2f}")
 
-    fpaths = list(input_dir.glob("*valid.txt"))
+
+    tokenized_path = Path(args.tokenized_data_path)
+    tokenized_path.mkdir(exist_ok=True, parents=True)
+    fpaths = list(input_dir.glob("*-valid.txt"))
+    # fpaths.extend(list(input_dir.glob("*-val.txt")))
+
     for fpath in fpaths:
         t0 = time.monotonic()
         tokens = tok.encode_file(fpath)
@@ -383,3 +389,5 @@ if __name__ == "__main__":
         logger.info(f"Processed {str(fpath)}")
         logger.info(f"Took {taken:.1f} s.")
         logger.info(f"Throughput: {fpath.stat().st_size / (1024 * 1024) / taken:.2f} MB/s")
+        fname = fpath.name
+        np.save(str((tokenized_path / fname).with_suffix(".npy")), np.array(tokens, dtype="uint16"))

@@ -24,6 +24,9 @@ class Embedding(nn.Module):
         nn.init.trunc_normal_(self.weight, std=sigma, a=-3*sigma, b=3*sigma)
 
     def forward(self, x: Int[Tensor, "batch ..."]) -> Float[Tensor, "batch ... d_model"]:
+        print(self.weight.shape)
+        print(x.shape)
+        print(x.reshape(-1).shape)
         out = torch.index_select(self.weight, dim=0, index=x.reshape(-1))
         return out.reshape(*x.shape, self.weight.size(1))
 
