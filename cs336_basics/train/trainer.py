@@ -37,11 +37,11 @@ class Trainer:
             num_heads=self.cfg.model.n_head,
             d_ff=self.cfg.model.dim_feedforward,
             rope_theta=self.cfg.model.theta,
-            device=self.cfg.training.device,
-            dtype=getattr(torch, self.cfg.training.dtype),
+            device=self.cfg.trainer.device,
+            dtype=getattr(torch, self.cfg.trainer.dtype),
         )
 
-        self.model.to(self.cfg.training.device)
+        self.model.to(self.cfg.trainer.device)
         logger.info("Model initialized with %d parameters", sum(p.numel() for p in self.model.parameters()))
 
         self.optimizer = AdamW(
@@ -54,16 +54,16 @@ class Trainer:
         self.train_dataset = Dataset(
             path_to_data=self.cfg.data.train_path,
             context_length=self.cfg.data.context_length,
-            device=self.cfg.training.device,
+            device=self.cfg.trainer.device,
         )
 
         self.valid_dataset = Dataset(
             path_to_data=self.cfg.data.val_path,
             context_length=self.cfg.data.context_length,
-            device=self.cfg.training.device,
+            device=self.cfg.trainer.device,
         )
 
-        self.save_dir = Path(self.cfg.training.output_dir)
+        self.save_dir = Path(self.cfg.trainer.output_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.iteration = 0
         self.wandb = wandb
@@ -117,31 +117,38 @@ class Trainer:
             loss /= self.cfg.trainer.gradient_accumulation_steps
 
         loss.backward()
-        gradient_clipping(self.model.parameters(), self.cfg.training.max_grad_norm)
+        gradient_clipping(self.model.parameters(), self.cfg.trainer.max_grad_norm)
         self.optimizer.step()
+        loss = loss.detach().cpu().numpy()
 
-        return {"loss": loss.item(), "lr": iter_lr}
+        return {"train_loss": loss, "lr": iter_lr}
 
 
     def train(self):
-        logger.info("Starting training for %d epochs", self.cfg.training.num_epochs)
-        while self.iteration < self.cfg.training.max_steps:
-            if self.iteration % self.cfg.training.save_interval == 0:
+        logger.info("Starting training for %d epochs", self.cfg.trainer.num_epochs)
+        while self.iteration < self.cfg.trainer.max_steps:
+            if self.iteration % self.cfg.trainer.save_interval == 0:
                 checkpoint_path = self.save_dir / f"checkpoint_iter_{self.iteration}.pt"
                 self.save_state(checkpoint_path)
 
             epoch_start_time = time.time()
             inputs, targets = self.train_dataset.get_batch(self.cfg.data.batch_size)
             stats = self.train_step(inputs, targets)
+            if self.iteration % self.cfg.trainer.log_interval == 0:
+                logger.info("Iteration %d: train_loss=%.4f, lr=%.6f, time=%.2fs",)
+                self.log(iteration=self.iteration, **stats)
             self.iteration += 1
-            self.save_state(checkpoint_path)
             epoch_end_time = time.time()
+            self.save_state(self.save_dir / "latest_checkpoint.pt")
+            if self.iteration % self.cfg.trainer.val_interval == 0:
+                val_metrics = self.validate()
+                self.log(iteration=self.iteration, **val_metrics)
 
 
     def validate(self):
         self.model.eval()
         val_iters = 0
-        val_loss_epoch = torch.zeros((), device=self.model.embeddings.weight.device, dtype=torch.float32)
+        val_loss_epoch = torch.zeros((), device=self.model.token_embedding.weight.device, dtype=torch.float32)
         for inputs, targets in tqdm(self.valid_dataset.get_iterator(self.cfg.data.val_batch_size),
             total=len(self.valid_dataset) // self.cfg.data.val_batch_size):
             with torch.no_grad():

@@ -58,7 +58,7 @@ class Config:
     data: DataConfig = DataConfig()
     optimizer: OptimizerConfig = OptimizerConfig()
     model: ModelConfig = ModelConfig()
-    training: TrainingConfig = TrainingConfig()
+    trainer: TrainingConfig = TrainingConfig()
     project: str = "cs336_basics_project"
 
 

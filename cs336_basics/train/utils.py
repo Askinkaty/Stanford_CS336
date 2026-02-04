@@ -4,6 +4,17 @@ from dataclasses import asdict, replace
 from datetime import datetime
 import json
 
+
+from cs336_basics.train.config import (
+    Config,
+    default_config,
+    DataConfig,
+    ModelConfig,
+    TrainingConfig,
+    OptimizerConfig,
+)
+
+
 def set_by_dotted(dc, dotted_key: str, value: Any):
     parts = dotted_key.split(".")
 
@@ -28,13 +39,13 @@ def save_config(cfg: Config):
 
 
 def load_config(config_str: str):
-    cfg: Config = default_cfg
+    cfg: Config = default_config
     updated_cfg = apply_overrides(cfg, json.loads(config_str))
     updated_cfg = Config(
         data=DataConfig(**updated_cfg.data),
         model=ModelConfig(**updated_cfg.model),
-        trainer=TrainerConfig(**updated_cfg.trainer),
-        optim=OptimConfig(**updated_cfg.optim),
+        trainer=TrainingConfig(**updated_cfg.trainer),
+        optim=OptimizerConfig(**updated_cfg.optim),
     )
     return updated_cfg
 
@@ -71,4 +82,4 @@ def render_template(template: str, cfg, extra: dict[str, Any] | None = None) -> 
 
 
 def wandb_run_name(cfg: Config, extra: dict[str, Any] | None = None) -> str:
-    return render_template(cfg.training.run_name, cfg, extra)
+    return render_template(cfg.trainer.run_name, cfg, extra)
