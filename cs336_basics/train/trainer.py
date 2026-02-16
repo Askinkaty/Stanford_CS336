@@ -67,6 +67,13 @@ class Trainer:
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.iteration = 0
         self.wandb = wandb
+        if self.wandb is not None:
+            # Ensure W&B uses iteration as the shared x-axis.
+            self.wandb.define_metric("iteration")
+            self.wandb.define_metric("train_loss", step_metric="iteration")
+            self.wandb.define_metric("lr", step_metric="iteration")
+            self.wandb.define_metric("val_loss", step_metric="iteration")
+            self.wandb.define_metric("val_ppl", step_metric="iteration")
 
         if load_from is not None:
             self.load_state(load_from)
@@ -102,7 +109,8 @@ class Trainer:
             if "log" not in k:
                 logger.info(f"{k}: {v}")
         if self.wandb is not None:
-            self.wandb.log(data)
+            step = data.get("iteration", self.iteration)
+            self.wandb.log(data, step=step)
 
     def train_step(self, inputs, targets):
         self.model.train()
@@ -119,9 +127,9 @@ class Trainer:
         loss.backward()
         gradient_clipping(self.model.parameters(), self.cfg.trainer.max_grad_norm)
         self.optimizer.step()
-        loss = loss.detach().cpu().numpy()
+        loss = loss.detach().cpu().item()
 
-        return {"train_loss": loss, "lr": iter_lr}
+        return {"train_loss": loss, "lr": float(iter_lr)}
 
 
     def train(self):
@@ -130,27 +138,38 @@ class Trainer:
             if self.iteration % self.cfg.trainer.save_interval == 0:
                 checkpoint_path = self.save_dir / f"checkpoint_iter_{self.iteration}.pt"
                 self.save_state(checkpoint_path)
+            if self.iteration > 0 and self.iteration % self.cfg.trainer.save_interval == 0:
+                self.save_state(self.save_dir / "latest_checkpoint.pt")
+            if self.iteration > 0 and self.iteration % self.cfg.trainer.val_interval == 0:
+                print("Running validation...")
+                val_metrics = self.validate()
+                self.log(iteration=self.iteration, **val_metrics)
 
             epoch_start_time = time.time()
             inputs, targets = self.train_dataset.get_batch(self.cfg.data.batch_size)
             stats = self.train_step(inputs, targets)
+            epoch_end_time = time.time()
             if self.iteration % self.cfg.trainer.log_interval == 0:
-                logger.info("Iteration %d: train_loss=%.4f, lr=%.6f, time=%.2fs",)
+                logger.info(
+                    "Iteration %d: train_loss=%.4f, lr=%.6f, time=%.2fs",
+                    self.iteration,
+                    stats["train_loss"],
+                    stats["lr"],
+                    epoch_end_time - epoch_start_time,
+                )
                 self.log(iteration=self.iteration, **stats)
             self.iteration += 1
-            epoch_end_time = time.time()
-            self.save_state(self.save_dir / "latest_checkpoint.pt")
-            if self.iteration % self.cfg.trainer.val_interval == 0:
-                val_metrics = self.validate()
-                self.log(iteration=self.iteration, **val_metrics)
+        self.save_state(self.save_dir / "final_checkpoint.pt")
+        val_metrics = self.validate()
+        self.log(iteration=self.iteration, **val_metrics)
 
 
     def validate(self):
         self.model.eval()
         val_iters = 0
         val_loss_epoch = torch.zeros((), device=self.model.token_embedding.weight.device, dtype=torch.float32)
-        for inputs, targets in tqdm(self.valid_dataset.get_iterator(self.cfg.data.val_batch_size),
-            total=len(self.valid_dataset) // self.cfg.data.val_batch_size):
+        print(len(self.valid_dataset)/self.cfg.data.val_batch_size)
+        for inputs, targets in tqdm(self.valid_dataset.get_iterator(self.cfg.data.val_batch_size), total=len(self.valid_dataset) // self.cfg.data.val_batch_size):
             with torch.no_grad():
                 outputs = self.model(inputs)
                 loss = cross_entropy_loss(outputs, targets)

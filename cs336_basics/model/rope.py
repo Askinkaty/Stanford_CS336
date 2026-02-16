@@ -23,12 +23,13 @@ class RopeEmbeddings(nn.Module):
         self.register_buffer("sin", sin, persistent=False) # persistent=False means they’re not saved in checkpoints, which is reasonable since they’re deterministic.
         self.register_buffer("cos", cos, persistent=False)
 
-    def forward(self, x: (Float[Tensor, "... sequence_length d_k"]), token_positions: Float[Tensor, "... sequence_length"]) -> Float[Tensor, "... sequence_length d_k"]:
+    def forward(self, x: (Float[Tensor, "... sequence_length d_k"]), token_positions: Int[Tensor, "... sequence_length"]) -> Float[Tensor, "... sequence_length d_k"]:
         in_type = x.dtype
 
         if token_positions is not None:
-            sin = self.sin[token_positions]
-            cos = self.cos[token_positions]
+            token_positions = token_positions.long()
+            sin = self.sin[token_positions].unsqueeze(1)
+            cos = self.cos[token_positions].unsqueeze(1)
         else:
             sin = self.sin[:x.size(-2)] #Advanced: arbitrary positions (useful for KV cache, packed sequences, sliding windows)
             cos = self.cos[:x.size(-2)]

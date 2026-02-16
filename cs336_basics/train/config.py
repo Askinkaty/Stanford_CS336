@@ -5,11 +5,11 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class DataConfig:
-    train_path: str | Path = "/home/katinska/Stanford_CS336/data/tokenized_data_tiny_stories/TinyStoriesV2-GPT4-train.npy"
-    val_path: str | Path = "/home/katinska/Stanford_CS336/data/tokenized_data_tiny_stories/TinyStoriesV2-GPT4-valid.npy"
+    train_path: str | Path = "/cs336_basics/data_tokenized/TinyStoriesV2-GPT4-train.npy"
+    val_path: str | Path = "/cs336_basics/data_tokenized/TinyStoriesV2-GPT4-valid.npy"
     test_path: str | Path = ""
-    batch_size: int = 1
-    val_batch_size: int = 1
+    batch_size: int = 4
+    val_batch_size: int = 4
     context_length: int = 256
 
 
@@ -49,7 +49,7 @@ class TrainingConfig:
     max_steps: int = 100000
     log_interval: int = 100
     save_interval: int = 100
-    val_interval: int = 100
+    val_interval: int = 500
     max_grad_norm: float = 1.0
 
 
