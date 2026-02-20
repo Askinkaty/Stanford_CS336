@@ -30,6 +30,11 @@ def parse_args() -> argparse.Namespace:
         help="Use a constant LR schedule (min_lr=learning_rate, warmup=0).",
     )
     p.add_argument("--seed", type=int, default=42, help="Base random seed.")
+    p.add_argument(
+        "--vary-seed-per-lr",
+        action="store_true",
+        help="Use seed + run_idx for each LR trial (disabled by default for fair LR comparisons).",
+    )
     p.add_argument("--device", type=str, default=None, help="Override device.")
     p.add_argument("--dtype", type=str, default=None, choices=["float32", "float16", "bfloat16"], help="Override dtype.")
     p.add_argument(
@@ -73,7 +78,6 @@ def quick_validate(trainer: Trainer, val_batch_size: int, num_batches: int) -> f
             if idx >= num_batches:
                 break
 
-            # Ensure data is on the same device as the model
             inputs = inputs.to(device)
             targets = targets.to(device)
 
@@ -86,7 +90,9 @@ def quick_validate(trainer: Trainer, val_batch_size: int, num_batches: int) -> f
     return float(sum(losses) / len(losses))
 
 
+
 def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx: int, output_dir: Path) -> dict:
+    run_seed = args.seed + run_idx if args.vary_seed_per_lr else args.seed
     trainer_cfg = replace(
         base_cfg.trainer,
         output_dir=str(output_dir / f"lr_{lr:.6g}"),
@@ -94,7 +100,7 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
         val_interval=max(1, args.val_interval),
         save_interval=args.max_steps + 1,
         log_interval=args.max_steps + 1,
-        seed=args.seed + run_idx,
+        seed=run_seed,
         device=args.device if args.device else base_cfg.trainer.device,
         dtype=args.dtype if args.dtype else base_cfg.trainer.dtype,
     )
@@ -170,14 +176,14 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
         should_validate = (step + 1) % args.val_interval == 0 or (step + 1) == args.max_steps
         if should_validate:
             val_loss = quick_validate(trainer, args.val_batch_size, args.val_batches)
-            last_val_loss = val_loss
-            best_val_loss = min(best_val_loss, val_loss)
 
             if not math.isfinite(val_loss):
                 diverged = True
                 diverged_step = step
                 diverged_reason = "non_finite_val_loss"
                 break
+
+            best_val_loss = min(best_val_loss, val_loss)
 
     result = {
         "lr": lr,
