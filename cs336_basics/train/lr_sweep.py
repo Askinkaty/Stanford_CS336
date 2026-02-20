@@ -65,14 +65,22 @@ def build_lr_grid(args: argparse.Namespace) -> list[float]:
 
 def quick_validate(trainer: Trainer, val_batch_size: int, num_batches: int) -> float:
     trainer.model.eval()
+    device = trainer.cfg.trainer.device
+
     losses: list[float] = []
     with torch.no_grad():
         for idx, (inputs, targets) in enumerate(trainer.valid_dataset.get_iterator(val_batch_size)):
             if idx >= num_batches:
                 break
+
+            # Ensure data is on the same device as the model
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+
             outputs = trainer.model(inputs)
             loss = cross_entropy_loss(outputs, targets).item()
-            losses.append(loss)
+            losses.append(float(loss))
+
     if not losses:
         return float("inf")
     return float(sum(losses) / len(losses))
@@ -104,17 +112,38 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
         torch.cuda.manual_seed_all(cfg.trainer.seed)
 
     trainer = Trainer(cfg=cfg, wandb=None)
+
+    # --- Track richer diagnostics for “edge of stability” analysis ---
     best_train_loss = float("inf")
-    best_val_loss = float("inf")
+    min_train_loss = float("inf")
+    first_train_loss = None
+    last_train_loss = None
+
+    # IMPORTANT: compute an initial val loss so best_val_loss is never None just because we diverged early
+    initial_val_loss = quick_validate(trainer, args.val_batch_size, args.val_batches)
+    best_val_loss = initial_val_loss
+    last_val_loss = initial_val_loss
+
     diverged = False
     diverged_step = None
     diverged_reason = ""
 
+    device = cfg.trainer.device
+
     for step in range(args.max_steps):
         trainer.iteration = step
+
         inputs, targets = trainer.train_dataset.get_batch(cfg.data.batch_size)
+        # be explicit about device here too (train_dataset might return CPU tensors)
+        inputs = inputs.to(device)
+        targets = targets.to(device)
+
         stats = trainer.train_step(inputs, targets)
         train_loss = float(stats["train_loss"])
+
+        if first_train_loss is None and math.isfinite(train_loss):
+            first_train_loss = train_loss
+        last_train_loss = train_loss
 
         if not math.isfinite(train_loss):
             diverged = True
@@ -128,6 +157,7 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
             diverged_reason = "train_loss_ceiling"
             break
 
+        # “edge of stability” detector: compare to best seen so far
         if best_train_loss < float("inf") and train_loss > args.explosion_ratio * best_train_loss:
             diverged = True
             diverged_step = step
@@ -135,11 +165,14 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
             break
 
         best_train_loss = min(best_train_loss, train_loss)
+        min_train_loss = min(min_train_loss, train_loss)
 
         should_validate = (step + 1) % args.val_interval == 0 or (step + 1) == args.max_steps
         if should_validate:
             val_loss = quick_validate(trainer, args.val_batch_size, args.val_batches)
+            last_val_loss = val_loss
             best_val_loss = min(best_val_loss, val_loss)
+
             if not math.isfinite(val_loss):
                 diverged = True
                 diverged_step = step
@@ -151,7 +184,12 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
         "diverged": diverged,
         "diverged_step": diverged_step,
         "diverged_reason": diverged_reason,
+        "first_train_loss": first_train_loss,
+        "min_train_loss": None if min_train_loss == float("inf") else min_train_loss,
+        "last_train_loss": last_train_loss,
         "best_train_loss": None if best_train_loss == float("inf") else best_train_loss,
+        "initial_val_loss": None if initial_val_loss == float("inf") else initial_val_loss,
+        "last_val_loss": None if last_val_loss == float("inf") else last_val_loss,
         "best_val_loss": None if best_val_loss == float("inf") else best_val_loss,
     }
     return result
@@ -187,7 +225,19 @@ def summarize(results: list[dict]) -> dict:
 
 
 def write_csv(path: Path, results: list[dict]) -> None:
-    fields = ["lr", "diverged", "diverged_step", "diverged_reason", "best_train_loss", "best_val_loss"]
+    fields = [
+        "lr",
+        "diverged",
+        "diverged_step",
+        "diverged_reason",
+        "first_train_loss",
+        "min_train_loss",
+        "last_train_loss",
+        "best_train_loss",
+        "initial_val_loss",
+        "last_val_loss",
+        "best_val_loss",
+    ]
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
