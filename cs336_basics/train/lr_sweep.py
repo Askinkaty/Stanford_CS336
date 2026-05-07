@@ -204,9 +204,19 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
 def summarize(results: list[dict]) -> dict:
     ordered = sorted(results, key=lambda r: r["lr"])
     stable = [r for r in ordered if not r["diverged"] and r["best_val_loss"] is not None]
+    finite_val = [
+        r for r in ordered
+        if r["best_val_loss"] is not None and math.isfinite(float(r["best_val_loss"]))
+    ]
     diverged = [r for r in ordered if r["diverged"]]
 
-    best = min(stable, key=lambda r: r["best_val_loss"]) if stable else None
+    # Prefer non-diverged runs; if none exist, fall back to any finite-val run.
+    if stable:
+        best = min(stable, key=lambda r: r["best_val_loss"])
+    elif finite_val:
+        best = min(finite_val, key=lambda r: r["best_val_loss"])
+    else:
+        best = None
     first_diverged = diverged[0] if diverged else None
     edge_stable = stable[-1] if stable else None
 

@@ -2,11 +2,13 @@ from dataclasses import dataclass
 from typing import Literal
 from pathlib import Path
 
+_DATA_DIR = Path(__file__).parent.parent / "data_tokenized"
+
 
 @dataclass(frozen=True)
 class DataConfig:
-    train_path: str | Path = "/cs336_basics/data_tokenized/TinyStoriesV2-GPT4-train.npy"
-    val_path: str | Path = "/cs336_basics/data_tokenized/TinyStoriesV2-GPT4-valid.npy"
+    train_path: str | Path = str(_DATA_DIR / "TinyStoriesV2-GPT4-train.npy")
+    val_path: str | Path = str(_DATA_DIR / "TinyStoriesV2-GPT4-valid.npy")
     test_path: str | Path = ""
     batch_size: int = 4
     val_batch_size: int = 4
