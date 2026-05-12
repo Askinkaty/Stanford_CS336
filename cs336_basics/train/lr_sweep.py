@@ -119,7 +119,7 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
 
     trainer = Trainer(cfg=cfg, wandb=None)
 
-    # --- Track richer diagnostics for “edge of stability” analysis ---
+    # --- Track richer diagnostics for "edge of stability" analysis ---
     best_train_loss = float("inf")
     min_train_loss = float("inf")
     first_train_loss = None
@@ -135,6 +135,8 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
     diverged_reason = ""
 
     device = cfg.trainer.device
+    train_curve: list[dict] = []
+    val_curve: list[dict] = [{"step": 0, "val_loss": initial_val_loss}]
 
     for step in range(args.max_steps):
         trainer.iteration = step
@@ -146,6 +148,7 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
 
         stats = trainer.train_step(inputs, targets)
         train_loss = float(stats["train_loss"])
+        train_curve.append({"step": step, "train_loss": train_loss})
 
         if first_train_loss is None and math.isfinite(train_loss):
             first_train_loss = train_loss
@@ -163,7 +166,7 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
             diverged_reason = "train_loss_ceiling"
             break
 
-        # “edge of stability” detector: compare to best seen so far
+        # "edge of stability" detector: compare to best seen so far
         if best_train_loss < float("inf") and train_loss > args.explosion_ratio * best_train_loss:
             diverged = True
             diverged_step = step
@@ -176,6 +179,7 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
         should_validate = (step + 1) % args.val_interval == 0 or (step + 1) == args.max_steps
         if should_validate:
             val_loss = quick_validate(trainer, args.val_batch_size, args.val_batches)
+            val_curve.append({"step": step + 1, "val_loss": val_loss})
 
             if not math.isfinite(val_loss):
                 diverged = True
@@ -184,6 +188,7 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
                 break
 
             best_val_loss = min(best_val_loss, val_loss)
+            last_val_loss = val_loss
 
     result = {
         "lr": lr,
@@ -197,6 +202,8 @@ def run_single_lr(base_cfg: Config, lr: float, args: argparse.Namespace, run_idx
         "initial_val_loss": None if initial_val_loss == float("inf") else initial_val_loss,
         "last_val_loss": None if last_val_loss == float("inf") else last_val_loss,
         "best_val_loss": None if best_val_loss == float("inf") else best_val_loss,
+        "train_curve": train_curve,
+        "val_curve": val_curve,
     }
     return result
 
@@ -240,6 +247,45 @@ def summarize(results: list[dict]) -> dict:
     return summary
 
 
+def plot_learning_curves(results: list[dict], out_dir: Path) -> None:
+    import matplotlib.pyplot as plt
+
+    ordered = sorted(results, key=lambda r: r["lr"])
+    cmap = plt.cm.plasma
+    colors = [cmap(i / max(len(ordered) - 1, 1)) for i in range(len(ordered))]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    for r, color in zip(ordered, colors):
+        label = f"lr={r['lr']:.2e}" + (" (div)" if r["diverged"] else "")
+        linestyle = "--" if r["diverged"] else "-"
+
+        train_curve = r.get("train_curve", [])
+        if train_curve:
+            steps = [p["step"] for p in train_curve]
+            losses = [p["train_loss"] for p in train_curve]
+            axes[0].plot(steps, losses, linestyle=linestyle, color=color, linewidth=1.2, label=label)
+
+        val_curve = r.get("val_curve", [])
+        if len(val_curve) > 1:
+            steps = [p["step"] for p in val_curve]
+            losses = [p["val_loss"] for p in val_curve]
+            axes[1].plot(steps, losses, linestyle=linestyle, color=color, linewidth=1.2, label=label)
+
+    for ax, title in zip(axes, ["Train loss", "Val loss"]):
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Loss")
+        ax.set_title(title)
+        ax.legend(fontsize=7, ncol=2)
+        ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    path = out_dir / "learning_curves.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Saved plot: {path}")
+
+
 def write_csv(path: Path, results: list[dict]) -> None:
     fields = [
         "lr",
@@ -258,7 +304,7 @@ def write_csv(path: Path, results: list[dict]) -> None:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for row in sorted(results, key=lambda r: r["lr"]):
-            writer.writerow(row)
+            writer.writerow({k: row[k] for k in fields})
 
 
 def main() -> None:
@@ -287,6 +333,8 @@ def main() -> None:
     with json_path.open("w", encoding="utf-8") as f:
         json.dump(json_payload, f, indent=2)
     write_csv(csv_path, results)
+
+    plot_learning_curves(results, out_dir)
 
     print("\nSummary")
     print(json.dumps(summary, indent=2))
