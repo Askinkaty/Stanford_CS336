@@ -50,6 +50,9 @@ class SwiGLU(nn.Module):
         self.w1 = nn.Parameter(torch.empty(d_ff, d_model, device=device, dtype=dtype))
         self.w2 = nn.Parameter(torch.empty(d_model, d_ff, device=device, dtype=dtype))
         self.w3 = nn.Parameter(torch.empty(d_ff, d_model, device=device, dtype=dtype))
+        sigma = 2 / (d_model + d_ff)
+        for w in (self.w1, self.w2, self.w3):
+            nn.init.trunc_normal_(w, std=sigma, a=-3 * sigma, b=3 * sigma)
 
     def forward(self, x: Float[Tensor, "... d_model"]) -> Float[Tensor, "... d_model"]:
         w1_out = einsum(x, self.w1, "... d_model, d_ff d_model -> ... d_ff")
