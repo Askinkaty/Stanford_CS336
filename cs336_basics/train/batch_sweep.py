@@ -158,6 +158,10 @@ def run_single_batch(
             best_val_loss = min(best_val_loss, val_loss)
             last_val_loss = val_loss
 
+    del trainer
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     return {
         "batch_size": batch_size,
         "lr": lr,
