@@ -124,8 +124,9 @@ def run_single_batch(
     first_train_loss = None
     last_train_loss = None
 
+    context_length = cfg.data.context_length
     train_curve: list[dict] = []
-    val_curve: list[dict] = [{"step": 0, "val_loss": initial_val_loss}]
+    val_curve: list[dict] = [{"step": 0, "tokens_seen": 0, "val_loss": initial_val_loss}]
 
     oom = False
     for step in range(args.max_steps):
@@ -139,7 +140,8 @@ def run_single_batch(
             break
 
         train_loss = float(stats["train_loss"])
-        train_curve.append({"step": step, "train_loss": train_loss})
+        tokens_seen = (step + 1) * batch_size * context_length
+        train_curve.append({"step": step, "tokens_seen": tokens_seen, "train_loss": train_loss})
 
         if first_train_loss is None and math.isfinite(train_loss):
             first_train_loss = train_loss
@@ -154,7 +156,7 @@ def run_single_batch(
             except torch.cuda.OutOfMemoryError:
                 oom = True
                 break
-            val_curve.append({"step": step + 1, "val_loss": val_loss})
+            val_curve.append({"step": step + 1, "tokens_seen": tokens_seen, "val_loss": val_loss})
             best_val_loss = min(best_val_loss, val_loss)
             last_val_loss = val_loss
 
@@ -201,25 +203,29 @@ def plot_learning_curves(results: list[dict], out_dir: Path) -> None:
     cmap = plt.cm.plasma
     colors = [cmap(i / max(len(ordered) - 1, 1)) for i in range(len(ordered))]
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
     for r, color in zip(ordered, colors):
         label = f"bs={r['batch_size']} lr={r['lr']:.2e}"
 
         train_curve = r.get("train_curve", [])
         if train_curve:
-            steps = [p["step"] for p in train_curve]
+            steps  = [p["step"] for p in train_curve]
+            tokens = [p["tokens_seen"] for p in train_curve]
             losses = [p["train_loss"] for p in train_curve]
-            axes[0].plot(steps, losses, color=color, linewidth=1.2, label=label)
+            axes[0].plot(steps,  losses, color=color, linewidth=1.2, label=label)
+            axes[1].plot(tokens, losses, color=color, linewidth=1.2, label=label)
 
         val_curve = r.get("val_curve", [])
         if len(val_curve) > 1:
-            steps = [p["step"] for p in val_curve]
+            tokens = [p["tokens_seen"] for p in val_curve]
             losses = [p["val_loss"] for p in val_curve]
-            axes[1].plot(steps, losses, color=color, linewidth=1.2, label=label)
+            axes[2].plot(tokens, losses, color=color, linewidth=1.2, label=label)
 
-    for ax, title in zip(axes, ["Train loss", "Val loss"]):
-        ax.set_xlabel("Step")
+    titles  = ["Train loss vs steps", "Train loss vs tokens", "Val loss vs tokens"]
+    xlabels = ["Gradient step", "Tokens seen", "Tokens seen"]
+    for ax, title, xlabel in zip(axes, titles, xlabels):
+        ax.set_xlabel(xlabel)
         ax.set_ylabel("Loss")
         ax.set_title(title)
         ax.legend(fontsize=7, ncol=2)
