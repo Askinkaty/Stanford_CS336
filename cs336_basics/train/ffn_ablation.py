@@ -1,11 +1,10 @@
 """
-Ablation study: RMSNorm vs no-norm at two learning rates.
+Ablation study: SwiGLU vs SiLU feed-forward networks with matched parameter counts.
 
-Produces two plots:
-  Plot 1 – optimal LR (~3.51e-4 from prior sweep): with norm vs without norm
-  Plot 2 – lower LR: with norm vs without norm (tests stability recovery)
+SwiGLU: 3 matrices (W1, W2, W3) at d_ff=1344  → 3 × 512 × 1344 = 2,064,384 params/layer
+SiLU:   2 matrices (W1, W2)    at d_ff=2048  → 2 × 512 × 2048 = 2,097,152 params/layer  (~matched)
 
-Each plot has two subplots: train loss (left) and val loss (right).
+Produces two plots (optimal LR and lower LR), each with train/val subplots.
 """
 import argparse
 import json
@@ -22,27 +21,26 @@ from cs336_basics.train.loss import cross_entropy_loss
 from cs336_basics.train.trainer import Trainer
 
 
-OPTIMAL_LR = 3.51e-4   # best LR from the prior sweep
-LOWER_LR   = 7e-5      # ~1/5th of optimal
+OPTIMAL_LR  = 3.51e-4
+LOWER_LR    = 7e-5
+SILU_D_FF   = 4 * default_config.model.d_model   # 2048, matched to SwiGLU param count
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--optimal-lr", type=float, default=OPTIMAL_LR)
-    p.add_argument("--lower-lr",   type=float, default=LOWER_LR)
-    p.add_argument("--max-steps",  type=int,   default=500)
-    p.add_argument("--batch-size", type=int,   default=8)
-    p.add_argument("--val-interval", type=int, default=50)
-    p.add_argument("--val-batches",  type=int, default=16)
-    p.add_argument("--seed",       type=int,   default=42)
-    p.add_argument("--device",     type=str,   default=None)
-    p.add_argument("--dtype",      type=str,   default=None,
+    p.add_argument("--optimal-lr",   type=float, default=OPTIMAL_LR)
+    p.add_argument("--lower-lr",     type=float, default=LOWER_LR)
+    p.add_argument("--max-steps",    type=int,   default=500)
+    p.add_argument("--batch-size",   type=int,   default=8)
+    p.add_argument("--val-interval", type=int,   default=50)
+    p.add_argument("--val-batches",  type=int,   default=16)
+    p.add_argument("--seed",         type=int,   default=42)
+    p.add_argument("--device",       type=str,   default=None)
+    p.add_argument("--dtype",        type=str,   default=None,
                    choices=["float32", "float16", "bfloat16"])
-    p.add_argument("--train-path", type=str,   default=None,
-                   help="Override path to training .npy file")
-    p.add_argument("--val-path",   type=str,   default=None,
-                   help="Override path to validation .npy file")
-    p.add_argument("--out-dir",    type=str,   default="output/norm_ablation")
+    p.add_argument("--train-path",   type=str,   default=None)
+    p.add_argument("--val-path",     type=str,   default=None)
+    p.add_argument("--out-dir",      type=str,   default="output/ffn_ablation")
     return p.parse_args()
 
 
@@ -59,9 +57,10 @@ def quick_validate(trainer: Trainer, batch_size: int, num_batches: int) -> float
     return float(sum(losses) / len(losses)) if losses else float("inf")
 
 
-def run_condition(base_cfg: Config, use_norm: bool, lr: float, args: argparse.Namespace,
-                  out_dir: Path) -> dict:
-    label = ("norm" if use_norm else "no_norm") + f"_lr{lr:.2e}"
+def run_condition(base_cfg: Config, ffn_type: str, lr: float,
+                  args: argparse.Namespace, out_dir: Path) -> dict:
+    d_ff = SILU_D_FF if ffn_type == "silu" else base_cfg.model.dim_feedforward
+    label = f"{ffn_type}_dff{d_ff}_lr{lr:.2e}"
 
     device = args.device if args.device else base_cfg.trainer.device
     dtype  = args.dtype  if args.dtype  else base_cfg.trainer.dtype
@@ -74,7 +73,7 @@ def run_condition(base_cfg: Config, use_norm: bool, lr: float, args: argparse.Na
 
     cfg = replace(
         base_cfg,
-        model=replace(base_cfg.model, norm_type="pre" if use_norm else "none"),
+        model=replace(base_cfg.model, ffn_type=ffn_type, dim_feedforward=d_ff),
         optimizer=replace(base_cfg.optimizer, learning_rate=lr, min_lr=0.0,
                           num_warmup_steps=100, cosine_steps=args.max_steps),
         data=replace(base_cfg.data, **data_overrides),
@@ -92,6 +91,8 @@ def run_condition(base_cfg: Config, use_norm: bool, lr: float, args: argparse.Na
         torch.cuda.manual_seed_all(args.seed)
 
     trainer = Trainer(cfg=cfg, wandb=None)
+    n_params = sum(p.numel() for p in trainer.model.parameters())
+    print(f"  params: {n_params:,}")
 
     train_curve: list[dict] = []
     val_curve:   list[dict] = [{"step": 0, "val_loss": quick_validate(trainer, args.batch_size, args.val_batches)}]
@@ -112,30 +113,29 @@ def run_condition(base_cfg: Config, use_norm: bool, lr: float, args: argparse.Na
             vl = quick_validate(trainer, args.batch_size, args.val_batches)
             val_curve.append({"step": step + 1, "val_loss": vl})
 
-    return {"label": label, "use_norm": use_norm, "lr": lr,
+    return {"label": label, "ffn_type": ffn_type, "d_ff": d_ff, "lr": lr,
             "diverged": diverged, "train_curve": train_curve, "val_curve": val_curve}
 
 
-def plot_pair(result_norm: dict, result_no_norm: dict, title: str, out_path: Path) -> None:
+def plot_comparison(result_swiglu: dict, result_silu: dict, title: str, out_path: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     fig.suptitle(title, fontsize=13)
 
-    for result, color, ls in [
-        (result_norm,    "#2563EB", "-"),
-        (result_no_norm, "#DC2626", "--"),
+    for r, color, ls in [
+        (result_swiglu, "#2563EB", "-"),
+        (result_silu,   "#16A34A", "--"),
     ]:
-        lbl_suffix = " (diverged)" if result["diverged"] else ""
-        norm_lbl   = "with RMSNorm" if result["use_norm"] else "no RMSNorm"
+        suffix = " (diverged)" if r["diverged"] else ""
+        lbl = f"{r['ffn_type'].upper()} d_ff={r['d_ff']}" + suffix
 
-        tc = result["train_curve"]
+        tc = r["train_curve"]
         if tc:
             axes[0].plot([p["step"] for p in tc], [p["train_loss"] for p in tc],
-                         color=color, ls=ls, lw=1.4, label=norm_lbl + lbl_suffix)
-
-        vc = result["val_curve"]
+                         color=color, ls=ls, lw=1.4, label=lbl)
+        vc = r["val_curve"]
         if len(vc) > 1:
             axes[1].plot([p["step"] for p in vc], [p["val_loss"] for p in vc],
-                         color=color, ls=ls, lw=1.4, label=norm_lbl + lbl_suffix)
+                         color=color, ls=ls, lw=1.4, label=lbl)
 
     for ax, ylabel in zip(axes, ["Train loss", "Val loss"]):
         ax.set_xlabel("Step")
@@ -156,47 +156,31 @@ def main() -> None:
     out_dir = Path(args.out_dir) / timestamp
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    conditions = [
-        (True,  args.optimal_lr),
-        (False, args.optimal_lr),
-        (True,  args.lower_lr),
-        (False, args.lower_lr),
-    ]
+    all_results: list[dict] = []
 
-    results: dict[str, dict] = {}
-    for use_norm, lr in conditions:
-        key = ("norm" if use_norm else "no_norm") + f"_{lr:.2e}"
-        print(f"\n--- Running: use_norm={use_norm}, lr={lr:.2e} ---")
-        r = run_condition(default_config, use_norm, lr, args, out_dir)
-        results[key] = r
-        status = "DIVERGED" if r["diverged"] else "OK"
-        final_train = r["train_curve"][-1]["train_loss"] if r["train_curve"] else float("nan")
-        final_val   = r["val_curve"][-1]["val_loss"]   if r["val_curve"]   else float("nan")
-        print(f"  {status}  final_train={final_train:.4f}  final_val={final_val:.4f}")
+    for lr, lr_label in [(args.optimal_lr, "optimal"), (args.lower_lr, "lower")]:
+        results: list[dict] = []
+        for ffn_type in ("swiglu", "silu"):
+            print(f"\n--- {ffn_type.upper()}, lr={lr:.2e} ---")
+            r = run_condition(default_config, ffn_type, lr, args, out_dir)
+            results.append(r)
+            all_results.append(r)
+            status = "DIVERGED" if r["diverged"] else "OK"
+            ft = r["train_curve"][-1]["train_loss"] if r["train_curve"] else float("nan")
+            fv = r["val_curve"][-1]["val_loss"]     if r["val_curve"]   else float("nan")
+            print(f"  {status}  final_train={ft:.4f}  final_val={fv:.4f}")
 
-    # Save raw results
+        plot_comparison(
+            results[0], results[1],
+            title=f"SwiGLU vs SiLU (param-matched) — LR = {lr:.2e}",
+            out_path=out_dir / f"plot_{lr_label}_lr.png",
+        )
+
     with (out_dir / "results.json").open("w") as f:
-        json.dump({k: {kk: vv for kk, vv in v.items()
-                       if kk not in ("train_curve", "val_curve")}
-                   for k, v in results.items()}, f, indent=2)
+        json.dump([{k: v for k, v in r.items() if k not in ("train_curve", "val_curve")}
+                   for r in all_results], f, indent=2)
 
-    # Plot 1: optimal LR
-    plot_pair(
-        results[f"norm_{args.optimal_lr:.2e}"],
-        results[f"no_norm_{args.optimal_lr:.2e}"],
-        title=f"RMSNorm ablation — optimal LR = {args.optimal_lr:.2e}",
-        out_path=out_dir / "plot_optimal_lr.png",
-    )
-
-    # Plot 2: lower LR
-    plot_pair(
-        results[f"norm_{args.lower_lr:.2e}"],
-        results[f"no_norm_{args.lower_lr:.2e}"],
-        title=f"RMSNorm ablation — lower LR = {args.lower_lr:.2e}",
-        out_path=out_dir / "plot_lower_lr.png",
-    )
-
-    print(f"\nAll results saved in {out_dir}")
+    print(f"\nAll results in {out_dir}")
 
 
 if __name__ == "__main__":

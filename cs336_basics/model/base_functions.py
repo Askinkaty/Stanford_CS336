@@ -62,6 +62,23 @@ class SwiGLU(nn.Module):
         return output
 
 
+class SiLUFFN(nn.Module):
+    """Two-matrix FFN with SiLU activation. Use d_ff = 4*d_model to approximately
+    match SwiGLU's parameter count (which has 3 matrices at d_ff ≈ 8/3 * d_model)."""
+    def __init__(self, d_model: int, d_ff: int, device: torch.device | None = None, dtype: torch.dtype | None = None):
+        super().__init__()
+        self.w1 = nn.Parameter(torch.empty(d_ff, d_model, device=device, dtype=dtype))
+        self.w2 = nn.Parameter(torch.empty(d_model, d_ff, device=device, dtype=dtype))
+        sigma = 2 / (d_model + d_ff)
+        for w in (self.w1, self.w2):
+            nn.init.trunc_normal_(w, std=sigma, a=-3 * sigma, b=3 * sigma)
+
+    def forward(self, x: Float[Tensor, "... d_model"]) -> Float[Tensor, "... d_model"]:
+        h = einsum(x, self.w1, "... d_model, d_ff d_model -> ... d_ff")
+        h = h * torch.sigmoid(h)  # SiLU
+        return einsum(h, self.w2, "... d_ff, d_model d_ff -> ... d_model")
+
+
 def softmax(x: Float[Tensor, "..."], dim: int) -> Float[Tensor, "..."]:
     max_x = torch.max(x, dim=dim, keepdim=True).values
     exp_x = torch.exp(x - max_x)

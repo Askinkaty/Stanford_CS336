@@ -1,11 +1,12 @@
 """
-Ablation study: RMSNorm vs no-norm at two learning rates.
+Ablation study: pre-norm vs post-norm transformer.
 
-Produces two plots:
-  Plot 1 – optimal LR (~3.51e-4 from prior sweep): with norm vs without norm
-  Plot 2 – lower LR: with norm vs without norm (tests stability recovery)
+Pre-norm:  x = x + sublayer(RMSNorm(x))   (+ final RMSNorm before output projection)
+Post-norm: x = RMSNorm(x + sublayer(x))   (no extra final norm)
 
-Each plot has two subplots: train loss (left) and val loss (right).
+Produces one plot with two subplots (train loss, val loss).
+Runs at the optimal LR from the prior sweep (~3.51e-4) and optionally a
+second plot at a lower LR to test whether post-norm needs a smaller step size.
 """
 import argparse
 import json
@@ -22,27 +23,25 @@ from cs336_basics.train.loss import cross_entropy_loss
 from cs336_basics.train.trainer import Trainer
 
 
-OPTIMAL_LR = 3.51e-4   # best LR from the prior sweep
-LOWER_LR   = 7e-5      # ~1/5th of optimal
+OPTIMAL_LR = 3.51e-4
+LOWER_LR   = 7e-5
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--optimal-lr", type=float, default=OPTIMAL_LR)
-    p.add_argument("--lower-lr",   type=float, default=LOWER_LR)
-    p.add_argument("--max-steps",  type=int,   default=500)
-    p.add_argument("--batch-size", type=int,   default=8)
-    p.add_argument("--val-interval", type=int, default=50)
-    p.add_argument("--val-batches",  type=int, default=16)
-    p.add_argument("--seed",       type=int,   default=42)
-    p.add_argument("--device",     type=str,   default=None)
-    p.add_argument("--dtype",      type=str,   default=None,
+    p.add_argument("--optimal-lr",   type=float, default=OPTIMAL_LR)
+    p.add_argument("--lower-lr",     type=float, default=LOWER_LR)
+    p.add_argument("--max-steps",    type=int,   default=500)
+    p.add_argument("--batch-size",   type=int,   default=8)
+    p.add_argument("--val-interval", type=int,   default=50)
+    p.add_argument("--val-batches",  type=int,   default=16)
+    p.add_argument("--seed",         type=int,   default=42)
+    p.add_argument("--device",       type=str,   default=None)
+    p.add_argument("--dtype",        type=str,   default=None,
                    choices=["float32", "float16", "bfloat16"])
-    p.add_argument("--train-path", type=str,   default=None,
-                   help="Override path to training .npy file")
-    p.add_argument("--val-path",   type=str,   default=None,
-                   help="Override path to validation .npy file")
-    p.add_argument("--out-dir",    type=str,   default="output/norm_ablation")
+    p.add_argument("--train-path",   type=str,   default=None)
+    p.add_argument("--val-path",     type=str,   default=None)
+    p.add_argument("--out-dir",      type=str,   default="output/prenorm_postnorm_ablation")
     return p.parse_args()
 
 
@@ -59,10 +58,9 @@ def quick_validate(trainer: Trainer, batch_size: int, num_batches: int) -> float
     return float(sum(losses) / len(losses)) if losses else float("inf")
 
 
-def run_condition(base_cfg: Config, use_norm: bool, lr: float, args: argparse.Namespace,
-                  out_dir: Path) -> dict:
-    label = ("norm" if use_norm else "no_norm") + f"_lr{lr:.2e}"
-
+def run_condition(base_cfg: Config, norm_type: str, lr: float,
+                  args: argparse.Namespace, out_dir: Path) -> dict:
+    label = f"{norm_type}_norm_lr{lr:.2e}"
     device = args.device if args.device else base_cfg.trainer.device
     dtype  = args.dtype  if args.dtype  else base_cfg.trainer.dtype
 
@@ -74,7 +72,7 @@ def run_condition(base_cfg: Config, use_norm: bool, lr: float, args: argparse.Na
 
     cfg = replace(
         base_cfg,
-        model=replace(base_cfg.model, norm_type="pre" if use_norm else "none"),
+        model=replace(base_cfg.model, norm_type=norm_type),
         optimizer=replace(base_cfg.optimizer, learning_rate=lr, min_lr=0.0,
                           num_warmup_steps=100, cosine_steps=args.max_steps),
         data=replace(base_cfg.data, **data_overrides),
@@ -112,30 +110,32 @@ def run_condition(base_cfg: Config, use_norm: bool, lr: float, args: argparse.Na
             vl = quick_validate(trainer, args.batch_size, args.val_batches)
             val_curve.append({"step": step + 1, "val_loss": vl})
 
-    return {"label": label, "use_norm": use_norm, "lr": lr,
+    return {"label": label, "norm_type": norm_type, "lr": lr,
             "diverged": diverged, "train_curve": train_curve, "val_curve": val_curve}
 
 
-def plot_pair(result_norm: dict, result_no_norm: dict, title: str, out_path: Path) -> None:
+def plot_comparison(results: list[dict], title: str, out_path: Path) -> None:
+    palette = {"pre": "#2563EB", "post": "#16A34A", "none": "#DC2626"}
+    linestyle = {"pre": "-", "post": "--", "none": ":"}
+
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     fig.suptitle(title, fontsize=13)
 
-    for result, color, ls in [
-        (result_norm,    "#2563EB", "-"),
-        (result_no_norm, "#DC2626", "--"),
-    ]:
-        lbl_suffix = " (diverged)" if result["diverged"] else ""
-        norm_lbl   = "with RMSNorm" if result["use_norm"] else "no RMSNorm"
+    for r in results:
+        nt = r["norm_type"]
+        color = palette.get(nt, "grey")
+        ls    = linestyle.get(nt, "-")
+        suffix = " (diverged)" if r["diverged"] else ""
+        lbl = f"{nt}-norm" + suffix
 
-        tc = result["train_curve"]
+        tc = r["train_curve"]
         if tc:
             axes[0].plot([p["step"] for p in tc], [p["train_loss"] for p in tc],
-                         color=color, ls=ls, lw=1.4, label=norm_lbl + lbl_suffix)
-
-        vc = result["val_curve"]
+                         color=color, ls=ls, lw=1.4, label=lbl)
+        vc = r["val_curve"]
         if len(vc) > 1:
             axes[1].plot([p["step"] for p in vc], [p["val_loss"] for p in vc],
-                         color=color, ls=ls, lw=1.4, label=norm_lbl + lbl_suffix)
+                         color=color, ls=ls, lw=1.4, label=lbl)
 
     for ax, ylabel in zip(axes, ["Train loss", "Val loss"]):
         ax.set_xlabel("Step")
@@ -156,47 +156,47 @@ def main() -> None:
     out_dir = Path(args.out_dir) / timestamp
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    conditions = [
-        (True,  args.optimal_lr),
-        (False, args.optimal_lr),
-        (True,  args.lower_lr),
-        (False, args.lower_lr),
-    ]
-
-    results: dict[str, dict] = {}
-    for use_norm, lr in conditions:
-        key = ("norm" if use_norm else "no_norm") + f"_{lr:.2e}"
-        print(f"\n--- Running: use_norm={use_norm}, lr={lr:.2e} ---")
-        r = run_condition(default_config, use_norm, lr, args, out_dir)
-        results[key] = r
+    # --- optimal LR: pre vs post ---
+    results_optimal: list[dict] = []
+    for norm_type in ("pre", "post"):
+        print(f"\n--- {norm_type}-norm, lr={args.optimal_lr:.2e} ---")
+        r = run_condition(default_config, norm_type, args.optimal_lr, args, out_dir)
+        results_optimal.append(r)
         status = "DIVERGED" if r["diverged"] else "OK"
-        final_train = r["train_curve"][-1]["train_loss"] if r["train_curve"] else float("nan")
-        final_val   = r["val_curve"][-1]["val_loss"]   if r["val_curve"]   else float("nan")
-        print(f"  {status}  final_train={final_train:.4f}  final_val={final_val:.4f}")
+        ft = r["train_curve"][-1]["train_loss"] if r["train_curve"] else float("nan")
+        fv = r["val_curve"][-1]["val_loss"]     if r["val_curve"]   else float("nan")
+        print(f"  {status}  final_train={ft:.4f}  final_val={fv:.4f}")
 
-    # Save raw results
-    with (out_dir / "results.json").open("w") as f:
-        json.dump({k: {kk: vv for kk, vv in v.items()
-                       if kk not in ("train_curve", "val_curve")}
-                   for k, v in results.items()}, f, indent=2)
-
-    # Plot 1: optimal LR
-    plot_pair(
-        results[f"norm_{args.optimal_lr:.2e}"],
-        results[f"no_norm_{args.optimal_lr:.2e}"],
-        title=f"RMSNorm ablation — optimal LR = {args.optimal_lr:.2e}",
+    plot_comparison(
+        results_optimal,
+        title=f"Pre-norm vs Post-norm — LR = {args.optimal_lr:.2e}",
         out_path=out_dir / "plot_optimal_lr.png",
     )
 
-    # Plot 2: lower LR
-    plot_pair(
-        results[f"norm_{args.lower_lr:.2e}"],
-        results[f"no_norm_{args.lower_lr:.2e}"],
-        title=f"RMSNorm ablation — lower LR = {args.lower_lr:.2e}",
+    # --- lower LR: pre vs post (tests whether post-norm needs smaller step) ---
+    results_lower: list[dict] = []
+    for norm_type in ("pre", "post"):
+        print(f"\n--- {norm_type}-norm, lr={args.lower_lr:.2e} ---")
+        r = run_condition(default_config, norm_type, args.lower_lr, args, out_dir)
+        results_lower.append(r)
+        status = "DIVERGED" if r["diverged"] else "OK"
+        ft = r["train_curve"][-1]["train_loss"] if r["train_curve"] else float("nan")
+        fv = r["val_curve"][-1]["val_loss"]     if r["val_curve"]   else float("nan")
+        print(f"  {status}  final_train={ft:.4f}  final_val={fv:.4f}")
+
+    plot_comparison(
+        results_lower,
+        title=f"Pre-norm vs Post-norm — lower LR = {args.lower_lr:.2e}",
         out_path=out_dir / "plot_lower_lr.png",
     )
 
-    print(f"\nAll results saved in {out_dir}")
+    # save summary
+    all_results = results_optimal + results_lower
+    with (out_dir / "results.json").open("w") as f:
+        json.dump([{k: v for k, v in r.items() if k not in ("train_curve", "val_curve")}
+                   for r in all_results], f, indent=2)
+
+    print(f"\nAll results in {out_dir}")
 
 
 if __name__ == "__main__":

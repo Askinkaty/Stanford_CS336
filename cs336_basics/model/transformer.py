@@ -4,14 +4,16 @@ from torch import Tensor
 from jaxtyping import Float, Int, Bool
 from einops import einsum, rearrange
 from cs336_basics.model.attention import MultiHeadSelfAttention
-from cs336_basics.model.base_functions import RMSNorm, SwiGLU, Embedding, Linear, softmax
+from cs336_basics.model.base_functions import RMSNorm, SwiGLU, SiLUFFN, Embedding, Linear, softmax
 
 _MAX_SEQ_LEN = 4096
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, d_ff: int, num_heads: int, max_seq_len: int = _MAX_SEQ_LEN, theta: float = 10000.0,
-                 device: str = "cpu", dtype: torch.dtype | None = None, use_norm: bool = True):
+    def __init__(self, d_model: int, d_ff: int, num_heads: int, max_seq_len: int = _MAX_SEQ_LEN, theta: float | None = 10000.0,
+                 device: str = "cpu", dtype: torch.dtype | None = None,
+                 norm_type: str = "pre", ffn_type: str = "swiglu"):
         super().__init__()
+        self.norm_type = norm_type
         self.attn = MultiHeadSelfAttention(
             d_model=d_model,
             num_heads=num_heads,
@@ -20,9 +22,10 @@ class TransformerBlock(nn.Module):
             device=device,
             dtype=dtype,
         )
-        self.norm1 = RMSNorm(d_model, device=device, dtype=dtype) if use_norm else nn.Identity()
-        self.ffn = SwiGLU(d_model, d_ff, device, dtype)
-        self.norm2 = RMSNorm(d_model, device=device, dtype=dtype) if use_norm else nn.Identity()
+        has_norm = norm_type in ("pre", "post")
+        self.norm1 = RMSNorm(d_model, device=device, dtype=dtype) if has_norm else nn.Identity()
+        self.ffn = SiLUFFN(d_model, d_ff, device, dtype) if ffn_type == "silu" else SwiGLU(d_model, d_ff, device, dtype)
+        self.norm2 = RMSNorm(d_model, device=device, dtype=dtype) if has_norm else nn.Identity()
 
     def forward(
         self,
@@ -30,15 +33,19 @@ class TransformerBlock(nn.Module):
         token_positions: Int[Tensor, "b seq"] | None = None,
     ) -> Float[Tensor, "b seq d_model"]:
 
-        x = x + self.attn(self.norm1(x), token_positions=token_positions)
-        x = x + self.ffn(self.norm2(x))
+        if self.norm_type == "post":
+            x = self.norm1(x + self.attn(x, token_positions=token_positions))
+            x = self.norm2(x + self.ffn(x))
+        else:  # "pre" or "none"
+            x = x + self.attn(self.norm1(x), token_positions=token_positions)
+            x = x + self.ffn(self.norm2(x))
         return x
 
 
 class Transformer(nn.Module):
     def __init__(self, vocab_size: int, context_length: int,
-                 d_model: int, num_layers: int, num_heads: int, d_ff: int, rope_theta: float, device: str = "cpu",
-                 dtype: torch.dtype | None = None, use_norm: bool = True):
+                 d_model: int, num_layers: int, num_heads: int, d_ff: int, rope_theta: float | None, device: str = "cpu",
+                 dtype: torch.dtype | None = None, norm_type: str = "pre", ffn_type: str = "swiglu"):
         super().__init__()
         self.token_embedding = Embedding(vocab_size, d_model, device, dtype)
         self.layers = nn.ModuleList([
@@ -50,11 +57,13 @@ class Transformer(nn.Module):
                 theta=rope_theta,
                 device=device,
                 dtype=dtype,
-                use_norm=use_norm,
+                norm_type=norm_type,
+                ffn_type=ffn_type,
             )
             for _ in range(num_layers)
         ])
-        self.norm = RMSNorm(d_model, device=device, dtype=dtype) if use_norm else nn.Identity()
+        # final norm only makes sense for pre-norm (post-norm already normalizes after each block)
+        self.norm = RMSNorm(d_model, device=device, dtype=dtype) if norm_type == "pre" else nn.Identity()
         self.output_projection = Linear(d_model, vocab_size, device=device, dtype=dtype)
 
     def forward(

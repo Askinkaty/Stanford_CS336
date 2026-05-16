@@ -34,8 +34,9 @@ class ModelConfig:
     num_layers: int = 4
     dim_feedforward: int = 1344
     vocab_size: int = 10000
-    theta: float = 10000.0
-    use_norm: bool = True
+    theta: float | None = 10000.0  # None disables RoPE (NoPE)
+    ffn_type: str = "swiglu"       # "swiglu" or "silu"
+    norm_type: str = "pre"  # "pre", "post", or "none"
 
 
 

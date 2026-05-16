@@ -20,7 +20,11 @@ class Dataset:
         if isinstance(path_to_data, np.ndarray):
             self.data = path_to_data
         else:
-            self.data = np.load(path_to_data, mmap_mode="r")
+            try:
+                self.data = np.load(path_to_data, mmap_mode="r")
+            except ValueError:
+                # mmap fails if the file is a raw token array (no .npy header) or header/size mismatch
+                self.data = np.memmap(path_to_data, dtype=np.uint16, mode="r")
         self.context_length = context_length
         self.total_length = self.data.shape[0]
         self.device = device
