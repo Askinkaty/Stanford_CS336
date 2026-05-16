@@ -10,7 +10,7 @@ _MAX_SEQ_LEN = 4096
 
 class TransformerBlock(nn.Module):
     def __init__(self, d_model: int, d_ff: int, num_heads: int, max_seq_len: int = _MAX_SEQ_LEN, theta: float = 10000.0,
-                 device: str = "cpu", dtype: torch.dtype | None = None):
+                 device: str = "cpu", dtype: torch.dtype | None = None, use_norm: bool = True):
         super().__init__()
         self.attn = MultiHeadSelfAttention(
             d_model=d_model,
@@ -20,9 +20,9 @@ class TransformerBlock(nn.Module):
             device=device,
             dtype=dtype,
         )
-        self.norm1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.norm1 = RMSNorm(d_model, device=device, dtype=dtype) if use_norm else nn.Identity()
         self.ffn = SwiGLU(d_model, d_ff, device, dtype)
-        self.norm2 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.norm2 = RMSNorm(d_model, device=device, dtype=dtype) if use_norm else nn.Identity()
 
     def forward(
         self,
@@ -38,7 +38,7 @@ class TransformerBlock(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, vocab_size: int, context_length: int,
                  d_model: int, num_layers: int, num_heads: int, d_ff: int, rope_theta: float, device: str = "cpu",
-                 dtype: torch.dtype | None = None):
+                 dtype: torch.dtype | None = None, use_norm: bool = True):
         super().__init__()
         self.token_embedding = Embedding(vocab_size, d_model, device, dtype)
         self.layers = nn.ModuleList([
@@ -50,10 +50,11 @@ class Transformer(nn.Module):
                 theta=rope_theta,
                 device=device,
                 dtype=dtype,
+                use_norm=use_norm,
             )
             for _ in range(num_layers)
         ])
-        self.norm = RMSNorm(d_model, device=device, dtype=dtype)
+        self.norm = RMSNorm(d_model, device=device, dtype=dtype) if use_norm else nn.Identity()
         self.output_projection = Linear(d_model, vocab_size, device=device, dtype=dtype)
 
     def forward(

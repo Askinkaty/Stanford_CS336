@@ -39,6 +39,7 @@ class Trainer:
             rope_theta=self.cfg.model.theta,
             device=self.cfg.trainer.device,
             dtype=getattr(torch, self.cfg.trainer.dtype),
+            use_norm=self.cfg.model.use_norm,
         )
 
         self.model.to(self.cfg.trainer.device)
