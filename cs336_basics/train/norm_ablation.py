@@ -38,6 +38,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device",     type=str,   default=None)
     p.add_argument("--dtype",      type=str,   default=None,
                    choices=["float32", "float16", "bfloat16"])
+    p.add_argument("--train-path", type=str,   default=None,
+                   help="Override path to training .npy file")
+    p.add_argument("--val-path",   type=str,   default=None,
+                   help="Override path to validation .npy file")
     p.add_argument("--out-dir",    type=str,   default="output/norm_ablation")
     return p.parse_args()
 
@@ -62,13 +66,18 @@ def run_condition(base_cfg: Config, use_norm: bool, lr: float, args: argparse.Na
     device = args.device if args.device else base_cfg.trainer.device
     dtype  = args.dtype  if args.dtype  else base_cfg.trainer.dtype
 
+    data_overrides: dict = dict(batch_size=args.batch_size, val_batch_size=args.batch_size)
+    if args.train_path:
+        data_overrides["train_path"] = args.train_path
+    if args.val_path:
+        data_overrides["val_path"] = args.val_path
+
     cfg = replace(
         base_cfg,
         model=replace(base_cfg.model, use_norm=use_norm),
         optimizer=replace(base_cfg.optimizer, learning_rate=lr, min_lr=0.0,
                           num_warmup_steps=100, cosine_steps=args.max_steps),
-        data=replace(base_cfg.data, batch_size=args.batch_size,
-                     val_batch_size=args.batch_size),
+        data=replace(base_cfg.data, **data_overrides),
         trainer=replace(base_cfg.trainer,
                         device=device, dtype=dtype,
                         max_steps=args.max_steps,
